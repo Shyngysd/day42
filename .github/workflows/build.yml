@@ -1,0 +1,277 @@
+name: Flutter Build & Deploy
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+    inputs:
+      build_flavor:
+        description: 'Build flavor (dev/prod/all)'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - prod
+          - all
+      build_type:
+        description: 'Build type (debug/release/all)'
+        required: true
+        default: 'debug'
+        type: choice
+        options:
+          - debug
+          - release
+          - all
+
+env:
+  FLUTTER_VERSION: '3.19.0'
+
+jobs:
+  # Test job - runs on all pushes and PRs
+  test:
+    name: Test & Analyze
+    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch'
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: ${{ env.FLUTTER_VERSION }}
+        channel: 'stable'
+
+    - name: Install dependencies
+      run: flutter pub get
+
+    - name: Analyze code
+      run: flutter analyze
+
+    - name: Run tests
+      run: flutter test --coverage
+
+    - name: Upload coverage
+      uses: codecov/codecov-action@v3
+      with:
+        files: ./coverage/lcov.info
+        flags: unittests
+
+  # Build Dev Debug APK
+  build-dev-debug:
+    name: Build Dev (Debug APK)
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' || 
+      (github.event_name == 'push' && github.ref == 'refs/heads/develop')
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: ${{ env.FLUTTER_VERSION }}
+        channel: 'stable'
+
+    - name: Get dependencies
+      run: flutter pub get
+
+    - name: Build Debug APK (Dev)
+      run: |
+        flutter build apk \
+          --flavor dev \
+          --target lib/main_dev.dart \
+          --debug \
+          -v
+    
+    - name: Upload Dev Debug APK
+      uses: actions/upload-artifact@v3
+      with:
+        name: flutter-app-dev-debug
+        path: build/app/outputs/flutter-apk/app-dev-debug.apk
+        retention-days: 7
+
+  # Build Dev Release APK
+  build-dev-release:
+    name: Build Dev (Release APK)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && (github.event.inputs.build_flavor == 'dev' || github.event.inputs.build_flavor == 'all')
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: ${{ env.FLUTTER_VERSION }}
+        channel: 'stable'
+
+    - name: Get dependencies
+      run: flutter pub get
+
+    - name: Increment build number
+      run: |
+        chmod +x scripts/increment_build_number.sh
+        ./scripts/increment_build_number.sh build
+
+    - name: Build Release APK (Dev)
+      run: |
+        flutter build apk \
+          --flavor dev \
+          --target lib/main_dev.dart \
+          --release \
+          -v
+
+    - name: Upload Dev Release APK
+      uses: actions/upload-artifact@v3
+      with:
+        name: flutter-app-dev-release
+        path: build/app/outputs/flutter-apk/app-dev-release.apk
+        retention-days: 30
+
+    - name: Commit updated version
+      run: |
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        git add pubspec.yaml
+        git commit -m "chore: increment build number (dev release)" || true
+        git push
+
+  # Build Prod Debug APK
+  build-prod-debug:
+    name: Build Prod (Debug APK)
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' && 
+      (github.event.inputs.build_flavor == 'prod' || github.event.inputs.build_flavor == 'all')
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: ${{ env.FLUTTER_VERSION }}
+        channel: 'stable'
+
+    - name: Get dependencies
+      run: flutter pub get
+
+    - name: Build Debug APK (Prod)
+      run: |
+        flutter build apk \
+          --flavor prod \
+          --target lib/main_prod.dart \
+          --debug \
+          -v
+
+    - name: Upload Prod Debug APK
+      uses: actions/upload-artifact@v3
+      with:
+        name: flutter-app-prod-debug
+        path: build/app/outputs/flutter-apk/app-prod-debug.apk
+        retention-days: 7
+
+  # Build Prod Release APK
+  build-prod-release:
+    name: Build Prod (Release APK)
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' && 
+      (github.event.inputs.build_flavor == 'prod' || github.event.inputs.build_flavor == 'all')
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: ${{ env.FLUTTER_VERSION }}
+        channel: 'stable'
+
+    - name: Get dependencies
+      run: flutter pub get
+
+    - name: Increment build number
+      run: |
+        chmod +x scripts/increment_build_number.sh
+        ./scripts/increment_build_number.sh build
+
+    - name: Build Release APK (Prod)
+      run: |
+        flutter build apk \
+          --flavor prod \
+          --target lib/main_prod.dart \
+          --release \
+          -v
+
+    - name: Upload Prod Release APK
+      uses: actions/upload-artifact@v3
+      with:
+        name: flutter-app-prod-release
+        path: build/app/outputs/flutter-apk/app-prod-release.apk
+        retention-days: 30
+
+    - name: Commit updated version
+      run: |
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        git add pubspec.yaml
+        git commit -m "chore: increment build number (prod release)" || true
+        git push
+
+  # Create Release
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-dev-release, build-prod-release]
+    if: |
+      github.event_name == 'workflow_dispatch' && 
+      github.event.inputs.build_flavor == 'all'
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+
+    - name: Get version from pubspec.yaml
+      id: get_version
+      run: |
+        VERSION=$(grep "^version:" pubspec.yaml | sed 's/version: //')
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+        echo "Version: $VERSION"
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ steps.get_version.outputs.VERSION }}
+        name: Release ${{ steps.get_version.outputs.VERSION }}
+        files: |
+          flutter-app-dev-release/app-dev-release.apk
+          flutter-app-prod-release/app-prod-release.apk
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Summary
+  build-summary:
+    name: Build Summary
+    runs-on: ubuntu-latest
+    needs: [build-dev-debug, build-dev-release, build-prod-debug, build-prod-release]
+    if: always()
+    
+    steps:
+    - name: Print Summary
+      run: |
+        echo "Build Summary:"
+        echo "=============="
+        echo "Dev Debug: ${{ needs.build-dev-debug.result }}"
+        echo "Dev Release: ${{ needs.build-dev-release.result }}"
+        echo "Prod Debug: ${{ needs.build-prod-debug.result }}"
+        echo "Prod Release: ${{ needs.build-prod-release.result }}"
